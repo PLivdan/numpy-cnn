@@ -269,7 +269,7 @@ class Flatten(BaseLayer):
     def build(self, input_shape):
         super().build(input_shape)
         self.input_shape = input_shape
-        self.output_shape = (input_shape[0], np.prod(input_shape[1:]))
+        self.output_shape = (input_shape[0], int(np.prod(input_shape[1:])))
 
     def forward(self, inputs, training=True):
         self.input_shape = inputs.shape

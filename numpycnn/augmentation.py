@@ -132,7 +132,9 @@ class ImageDataAugmentor:
         self.random_state.shuffle(channel_indices)
         return image[..., channel_indices]
 
-    def augment(self, images, target_shape=(28, 28)):
+    def augment(self, images, target_shape=None):
+        if target_shape is None:
+            target_shape = images.shape[1:3]
         augmented_images = []
         for image in images:
             for aug_fn, prob in self.augmentations:

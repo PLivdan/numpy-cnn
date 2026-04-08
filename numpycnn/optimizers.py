@@ -131,22 +131,31 @@ class Adam(Optimizer):
             layer.params[key] -= lr * v_corr["d" + key] / (np.sqrt(s_corr["d" + key]) + self.epsilon)
 
 
-class AdamW(Adam):
+class AdamW(Optimizer):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.beta1 = 0.9
+        self.beta2 = 0.999
+        self.epsilon = 1e-8
         self.weight_decay = 0.01
+
+    def init_params(self, layer):
+        layer.v = {}
+        layer.s = {}
+        layer.t = 0
+        for key in layer.params.keys():
+            layer.v["d" + key] = np.zeros_like(layer.params[key])
+            layer.s["d" + key] = np.zeros_like(layer.params[key])
 
     def update(self, layer, grads, lr):
         super().update(layer, grads, lr)
         layer.t += 1
-        v_corr = {}
-        s_corr = {}
         for key in layer.params.keys():
             layer.v["d" + key] = self.beta1 * layer.v["d" + key] + (1 - self.beta1) * grads["d" + key]
-            v_corr["d" + key] = layer.v["d" + key] / (1 - self.beta1 ** layer.t)
+            v_corr = layer.v["d" + key] / (1 - self.beta1 ** layer.t)
             layer.s["d" + key] = self.beta2 * layer.s["d" + key] + (1 - self.beta2) * np.square(grads["d" + key])
-            s_corr["d" + key] = layer.s["d" + key] / (1 - self.beta2 ** layer.t)
-            layer.params[key] -= lr * v_corr["d" + key] / (np.sqrt(s_corr["d" + key]) + self.epsilon)
+            s_corr = layer.s["d" + key] / (1 - self.beta2 ** layer.t)
+            layer.params[key] -= lr * v_corr / (np.sqrt(s_corr) + self.epsilon)
             if key == 'W':
                 layer.params[key] -= lr * self.weight_decay * layer.params[key]
 

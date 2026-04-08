@@ -14,3 +14,4 @@ from .losses import (
 )
 from .schedulers import LRScheduler
 from .augmentation import ImageDataAugmentor
+from .datasets import load_fashion_mnist, load_cifar10

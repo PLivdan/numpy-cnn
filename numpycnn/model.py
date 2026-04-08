@@ -144,14 +144,31 @@ class Model:
             history['val_accuracy'].append(val_accuracy)
         return history
 
+    @staticmethod
+    def _get_init_args(layer):
+        layer_type = type(layer).__name__
+        arg_map = {
+            'Conv2D': ('filters', 'kernel_size', 'stride', 'padding', 'activation', 'initializer'),
+            'Pooling2D': ('pool_size', 'stride', 'mode'),
+            'GlobalAvgPool2D': (),
+            'Flatten': (),
+            'Dense': ('units', 'activation', 'initializer'),
+            'BatchNorm': ('momentum', 'epsilon'),
+            'LayerNorm': ('epsilon',),
+            'Dropout': ('rate',),
+            'SkipConnection': ('skip_from', 'operation'),
+        }
+        keys = arg_map.get(layer_type, ())
+        return {k: getattr(layer, k) for k in keys}
+
     def save(self, filename):
         model_state = {'layers': [], 'compiled': self.compiled}
         for layer in self.layers:
-            layer_type = type(layer).__name__
-            init_args = {}
-            if layer_type == 'Dense':
-                init_args = {'units': layer.units, 'activation': layer.activation, 'initializer': layer.initializer}
-            layer_state = {'type': layer_type, 'init_args': init_args, 'state': layer.__dict__}
+            layer_state = {
+                'type': type(layer).__name__,
+                'init_args': self._get_init_args(layer),
+                'state': layer.__dict__,
+            }
             model_state['layers'].append(layer_state)
         with open(filename, 'wb') as file:
             pickle.dump(model_state, file)

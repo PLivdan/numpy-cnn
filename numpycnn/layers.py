@@ -59,7 +59,7 @@ def im2col(inputs, kernel_size, stride, padding):
     shape = (N, OH, OW, KH, KW, C)
     strides = (s_n, s_h * stride, s_w * stride, s_h, s_w, s_c)
     patches = np.lib.stride_tricks.as_strided(inputs, shape=shape, strides=strides)
-    col = patches.transpose(3, 4, 5, 0, 1, 2).reshape(KH * KW * C, N * OH * OW)
+    col = patches.transpose(3, 4, 5, 1, 2, 0).reshape(KH * KW * C, OH * OW * N)
     return col
 
 
@@ -69,7 +69,7 @@ def col2im(col_matrix, input_shape, kernel_size, stride, padding):
     H_p, W_p = H + 2 * padding, W + 2 * padding
     OH = (H_p - KH) // stride + 1
     OW = (W_p - KW) // stride + 1
-    col_reshaped = col_matrix.reshape(KH, KW, C, N, OH, OW).transpose(3, 4, 5, 0, 1, 2)
+    col_reshaped = col_matrix.reshape(KH, KW, C, OH, OW, N).transpose(5, 3, 4, 0, 1, 2)
     dinputs_padded = np.zeros((N, H_p, W_p, C))
     for i in range(KH):
         i_max = i + OH * stride
@@ -852,7 +852,7 @@ def im2col_1d(inputs, kernel_size, stride, padding):
     shape = (N, oL, K, C)
     strides = (s_n, s_l * stride, s_l, s_c)
     patches = np.lib.stride_tricks.as_strided(inputs, shape=shape, strides=strides)
-    return patches.transpose(2, 3, 0, 1).reshape(K * C, N * oL)
+    return patches.transpose(2, 3, 1, 0).reshape(K * C, oL * N)
 
 
 def col2im_1d(col, input_shape, kernel_size, stride, padding):
@@ -860,7 +860,7 @@ def col2im_1d(col, input_shape, kernel_size, stride, padding):
     K = kernel_size
     L_p = L + 2 * padding
     oL = (L_p - K) // stride + 1
-    col_reshaped = col.reshape(K, C, N, oL).transpose(2, 3, 0, 1)
+    col_reshaped = col.reshape(K, C, oL, N).transpose(3, 2, 0, 1)
     dinputs_padded = np.zeros((N, L_p, C))
     for i in range(K):
         dinputs_padded[:, i:i + oL * stride:stride, :] += col_reshaped[:, :, i, :]

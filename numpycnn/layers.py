@@ -137,7 +137,7 @@ class Conv2D(BaseLayer):
     def backward(self, grads, learning_rate):
         dparams = {"dW": np.zeros_like(self.params["W"]), "db": np.zeros_like(self.params["b"])}
         if self.activation == 'relu':
-            grads[self.outputs <= 0] = 0
+            grads = grads * (self.outputs > 0)
         N, H, W, C = self.inputs.shape
         KH, KW = self.kernel_size
         _, OH, OW, _ = self.output_shape
@@ -341,8 +341,7 @@ class Dense(BaseLayer):
         dparams = {"dW": np.zeros_like(self.params["W"]), "db": np.zeros_like(self.params["b"])}
         batch_size = dA.shape[0]
         if self.activation == "relu":
-            dZ = np.array(dA, copy=True)
-            dZ[self.A <= 0] = 0
+            dZ = dA * (self.A > 0)
         elif self.activation == "sigmoid":
             dZ = dA * self.A * (1 - self.A)
         elif self.activation == "tanh":

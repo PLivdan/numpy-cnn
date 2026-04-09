@@ -2,6 +2,10 @@ import numpy as np
 from .layers import BaseLayer
 
 
+def _sigmoid(x):
+    return 1 / (1 + np.exp(-np.clip(x, -500, 500)))
+
+
 class RNN(BaseLayer):
     def __init__(self, units, return_sequences=False, initializer="xavier"):
         super().__init__()
@@ -9,15 +13,14 @@ class RNN(BaseLayer):
         self.return_sequences = return_sequences
         self.initializer = initializer
         self.layer_type = "RNN"
-        self.params = {"W_ih": None, "W_hh": None, "b": None}
+        self.params = {"W": None, "b": None}
 
     def build(self, input_shape):
         super().build(input_shape)
         N, T, D = input_shape
         H = self.units
         scale = np.sqrt(2.0 / (D + H))
-        self.params["W_ih"] = np.random.randn(D, H) * scale
-        self.params["W_hh"] = np.random.randn(H, H) * scale
+        self.params["W"] = np.random.randn(D + H, H) * scale
         self.params["b"] = np.zeros((1, H))
         self.output_shape = (N, T, H) if self.return_sequences else (N, H)
 
@@ -26,12 +29,11 @@ class RNN(BaseLayer):
         N, T, D = inputs.shape
         H = self.units
         self.h = np.zeros((N, T + 1, H))
+        self._xh = np.empty((N, D + H))
         for t in range(T):
-            self.h[:, t + 1] = np.tanh(
-                inputs[:, t] @ self.params["W_ih"] +
-                self.h[:, t] @ self.params["W_hh"] +
-                self.params["b"]
-            )
+            self._xh[:, :D] = inputs[:, t]
+            self._xh[:, D:] = self.h[:, t]
+            self.h[:, t + 1] = np.tanh(self._xh @ self.params["W"] + self.params["b"])
         if self.return_sequences:
             return self.h[:, 1:]
         return self.h[:, -1]
@@ -39,11 +41,8 @@ class RNN(BaseLayer):
     def backward(self, grads, learning_rate):
         N, T, D = self.inputs.shape
         H = self.units
-        dparams = {
-            "dW_ih": np.zeros_like(self.params["W_ih"]),
-            "dW_hh": np.zeros_like(self.params["W_hh"]),
-            "db": np.zeros_like(self.params["b"]),
-        }
+        dW = np.zeros_like(self.params["W"])
+        db = np.zeros_like(self.params["b"])
         dinputs = np.zeros_like(self.inputs)
         if self.return_sequences:
             dh_all = grads
@@ -51,16 +50,19 @@ class RNN(BaseLayer):
             dh_all = np.zeros((N, T, H))
             dh_all[:, -1] = grads
         dh_next = np.zeros((N, H))
+        xh = np.empty((N, D + H))
         for t in reversed(range(T)):
             dh = dh_all[:, t] + dh_next
             dtanh = dh * (1 - self.h[:, t + 1] ** 2)
-            dparams["dW_ih"] += self.inputs[:, t].T @ dtanh / N
-            dparams["dW_hh"] += self.h[:, t].T @ dtanh / N
-            dparams["db"] += np.sum(dtanh, axis=0, keepdims=True) / N
-            dinputs[:, t] = dtanh @ self.params["W_ih"].T
-            dh_next = dtanh @ self.params["W_hh"].T
+            xh[:, :D] = self.inputs[:, t]
+            xh[:, D:] = self.h[:, t]
+            dW += xh.T @ dtanh / N
+            db += np.sum(dtanh, axis=0, keepdims=True) / N
+            dxh = dtanh @ self.params["W"].T
+            dinputs[:, t] = dxh[:, :D]
+            dh_next = dxh[:, D:]
         if self.trainable:
-            self.optimizer.update(self, dparams, learning_rate)
+            self.optimizer.update(self, {"dW": dW, "db": db}, learning_rate)
         return dinputs
 
     def get_num_parameters(self):
@@ -78,21 +80,17 @@ class LSTM(BaseLayer):
         self.return_sequences = return_sequences
         self.initializer = initializer
         self.layer_type = "LSTM"
-        self.params = {"W_i": None, "W_h": None, "b": None}
+        self.params = {"W": None, "b": None}
 
     def build(self, input_shape):
         super().build(input_shape)
         N, T, D = input_shape
         H = self.units
         scale = np.sqrt(2.0 / (D + H))
-        self.params["W_i"] = np.random.randn(D, 4 * H) * scale
-        self.params["W_h"] = np.random.randn(H, 4 * H) * scale
+        self.params["W"] = np.random.randn(D + H, 4 * H) * scale
         self.params["b"] = np.zeros((1, 4 * H))
         self.params["b"][0, H:2*H] = 1.0
         self.output_shape = (N, T, H) if self.return_sequences else (N, H)
-
-    def _sigmoid(self, x):
-        return 1 / (1 + np.exp(-np.clip(x, -500, 500)))
 
     def forward(self, inputs, training=True):
         self.inputs = inputs
@@ -100,16 +98,24 @@ class LSTM(BaseLayer):
         H = self.units
         self.h = np.zeros((N, T + 1, H))
         self.c = np.zeros((N, T + 1, H))
-        self.gates = {}
+        self._f = np.empty((T, N, H))
+        self._i = np.empty((T, N, H))
+        self._g = np.empty((T, N, H))
+        self._o = np.empty((T, N, H))
+        self._tanh_c = np.empty((T, N, H))
+        xh = np.empty((N, D + H))
+        W, b = self.params["W"], self.params["b"]
         for t in range(T):
-            z = inputs[:, t] @ self.params["W_i"] + self.h[:, t] @ self.params["W_h"] + self.params["b"]
-            f = self._sigmoid(z[:, :H])
-            i = self._sigmoid(z[:, H:2*H])
-            g = np.tanh(z[:, 2*H:3*H])
-            o = self._sigmoid(z[:, 3*H:])
-            self.c[:, t + 1] = f * self.c[:, t] + i * g
-            self.h[:, t + 1] = o * np.tanh(self.c[:, t + 1])
-            self.gates[t] = (f, i, g, o)
+            xh[:, :D] = inputs[:, t]
+            xh[:, D:] = self.h[:, t]
+            z = xh @ W + b
+            self._f[t] = _sigmoid(z[:, :H])
+            self._i[t] = _sigmoid(z[:, H:2*H])
+            self._g[t] = np.tanh(z[:, 2*H:3*H])
+            self._o[t] = _sigmoid(z[:, 3*H:])
+            self.c[:, t + 1] = self._f[t] * self.c[:, t] + self._i[t] * self._g[t]
+            self._tanh_c[t] = np.tanh(self.c[:, t + 1])
+            self.h[:, t + 1] = self._o[t] * self._tanh_c[t]
         if self.return_sequences:
             return self.h[:, 1:]
         return self.h[:, -1]
@@ -117,11 +123,8 @@ class LSTM(BaseLayer):
     def backward(self, grads, learning_rate):
         N, T, D = self.inputs.shape
         H = self.units
-        dparams = {
-            "dW_i": np.zeros_like(self.params["W_i"]),
-            "dW_h": np.zeros_like(self.params["W_h"]),
-            "db": np.zeros_like(self.params["b"]),
-        }
+        dW = np.zeros_like(self.params["W"])
+        db = np.zeros_like(self.params["b"])
         dinputs = np.zeros_like(self.inputs)
         if self.return_sequences:
             dh_all = grads
@@ -130,28 +133,32 @@ class LSTM(BaseLayer):
             dh_all[:, -1] = grads
         dh_next = np.zeros((N, H))
         dc_next = np.zeros((N, H))
+        xh = np.empty((N, D + H))
+        dz = np.empty((N, 4 * H))
+        W = self.params["W"]
         for t in reversed(range(T)):
-            f, i, g, o = self.gates[t]
+            f, i, g, o = self._f[t], self._i[t], self._g[t], self._o[t]
+            tanh_c = self._tanh_c[t]
             dh = dh_all[:, t] + dh_next
-            tanh_c = np.tanh(self.c[:, t + 1])
             do = dh * tanh_c
             dc = dh * o * (1 - tanh_c ** 2) + dc_next
             df = dc * self.c[:, t]
             di = dc * g
             dg = dc * i
             dc_next = dc * f
-            df_raw = df * f * (1 - f)
-            di_raw = di * i * (1 - i)
-            dg_raw = dg * (1 - g ** 2)
-            do_raw = do * o * (1 - o)
-            dz = np.concatenate([df_raw, di_raw, dg_raw, do_raw], axis=1)
-            dparams["dW_i"] += self.inputs[:, t].T @ dz / N
-            dparams["dW_h"] += self.h[:, t].T @ dz / N
-            dparams["db"] += np.sum(dz, axis=0, keepdims=True) / N
-            dinputs[:, t] = dz @ self.params["W_i"].T
-            dh_next = dz @ self.params["W_h"].T
+            dz[:, :H] = df * f * (1 - f)
+            dz[:, H:2*H] = di * i * (1 - i)
+            dz[:, 2*H:3*H] = dg * (1 - g ** 2)
+            dz[:, 3*H:] = do * o * (1 - o)
+            xh[:, :D] = self.inputs[:, t]
+            xh[:, D:] = self.h[:, t]
+            dW += xh.T @ dz / N
+            db += np.sum(dz, axis=0, keepdims=True) / N
+            dxh = dz @ W.T
+            dinputs[:, t] = dxh[:, :D]
+            dh_next = dxh[:, D:]
         if self.trainable:
-            self.optimizer.update(self, dparams, learning_rate)
+            self.optimizer.update(self, {"dW": dW, "db": db}, learning_rate)
         return dinputs
 
     def get_num_parameters(self):
@@ -169,36 +176,41 @@ class GRU(BaseLayer):
         self.return_sequences = return_sequences
         self.initializer = initializer
         self.layer_type = "GRU"
-        self.params = {"W_i": None, "W_h": None, "b_i": None, "b_h": None}
+        self.params = {"Wz": None, "Wn": None, "bz": None, "bn": None}
 
     def build(self, input_shape):
         super().build(input_shape)
         N, T, D = input_shape
         H = self.units
         scale = np.sqrt(2.0 / (D + H))
-        self.params["W_i"] = np.random.randn(D, 3 * H) * scale
-        self.params["W_h"] = np.random.randn(H, 3 * H) * scale
-        self.params["b_i"] = np.zeros((1, 3 * H))
-        self.params["b_h"] = np.zeros((1, 3 * H))
+        self.params["Wz"] = np.random.randn(D + H, 2 * H) * scale
+        self.params["Wn"] = np.random.randn(D + H, H) * scale
+        self.params["bz"] = np.zeros((1, 2 * H))
+        self.params["bn"] = np.zeros((1, H))
         self.output_shape = (N, T, H) if self.return_sequences else (N, H)
-
-    def _sigmoid(self, x):
-        return 1 / (1 + np.exp(-np.clip(x, -500, 500)))
 
     def forward(self, inputs, training=True):
         self.inputs = inputs
         N, T, D = inputs.shape
         H = self.units
         self.h = np.zeros((N, T + 1, H))
-        self.cache = {}
+        self._z = np.empty((T, N, H))
+        self._r = np.empty((T, N, H))
+        self._n = np.empty((T, N, H))
+        xh = np.empty((N, D + H))
+        xrh = np.empty((N, D + H))
+        Wz, Wn = self.params["Wz"], self.params["Wn"]
+        bz, bn = self.params["bz"], self.params["bn"]
         for t in range(T):
-            x_gates = inputs[:, t] @ self.params["W_i"] + self.params["b_i"]
-            h_gates = self.h[:, t] @ self.params["W_h"] + self.params["b_h"]
-            z = self._sigmoid(x_gates[:, :H] + h_gates[:, :H])
-            r = self._sigmoid(x_gates[:, H:2*H] + h_gates[:, H:2*H])
-            n = np.tanh(x_gates[:, 2*H:] + r * h_gates[:, 2*H:])
-            self.h[:, t + 1] = (1 - z) * self.h[:, t] + z * n
-            self.cache[t] = (z, r, n, x_gates, h_gates)
+            xh[:, :D] = inputs[:, t]
+            xh[:, D:] = self.h[:, t]
+            zr = _sigmoid(xh @ Wz + bz)
+            self._z[t] = zr[:, :H]
+            self._r[t] = zr[:, H:]
+            xrh[:, :D] = inputs[:, t]
+            xrh[:, D:] = self._r[t] * self.h[:, t]
+            self._n[t] = np.tanh(xrh @ Wn + bn)
+            self.h[:, t + 1] = (1 - self._z[t]) * self.h[:, t] + self._z[t] * self._n[t]
         if self.return_sequences:
             return self.h[:, 1:]
         return self.h[:, -1]
@@ -206,12 +218,10 @@ class GRU(BaseLayer):
     def backward(self, grads, learning_rate):
         N, T, D = self.inputs.shape
         H = self.units
-        dparams = {
-            "dW_i": np.zeros_like(self.params["W_i"]),
-            "dW_h": np.zeros_like(self.params["W_h"]),
-            "db_i": np.zeros_like(self.params["b_i"]),
-            "db_h": np.zeros_like(self.params["b_h"]),
-        }
+        dWz = np.zeros_like(self.params["Wz"])
+        dWn = np.zeros_like(self.params["Wn"])
+        dbz = np.zeros_like(self.params["bz"])
+        dbn = np.zeros_like(self.params["bn"])
         dinputs = np.zeros_like(self.inputs)
         if self.return_sequences:
             dh_all = grads
@@ -219,34 +229,30 @@ class GRU(BaseLayer):
             dh_all = np.zeros((N, T, H))
             dh_all[:, -1] = grads
         dh_next = np.zeros((N, H))
+        xh = np.empty((N, D + H))
+        xrh = np.empty((N, D + H))
+        Wz, Wn = self.params["Wz"], self.params["Wn"]
         for t in reversed(range(T)):
-            z, r, n, x_gates, h_gates = self.cache[t]
+            z, r, n = self._z[t], self._r[t], self._n[t]
             dh = dh_all[:, t] + dh_next
-            dz = dh * (n - self.h[:, t])
-            dn = dh * z
-            dh_prev_z = dh * (1 - z)
-            dn_raw = dn * (1 - n ** 2)
-            dz_raw = dz * z * (1 - z)
-            dx_n = dn_raw
-            dh_n = dn_raw * r
-            dr = dn_raw * h_gates[:, 2*H:]
-            dr_raw = dr * r * (1 - r)
-            dx_gates = np.zeros_like(x_gates)
-            dx_gates[:, :H] = dz_raw
-            dx_gates[:, H:2*H] = dr_raw
-            dx_gates[:, 2*H:] = dx_n
-            dh_gates = np.zeros_like(h_gates)
-            dh_gates[:, :H] = dz_raw
-            dh_gates[:, H:2*H] = dr_raw
-            dh_gates[:, 2*H:] = dh_n
-            dparams["dW_i"] += self.inputs[:, t].T @ dx_gates / N
-            dparams["dW_h"] += self.h[:, t].T @ dh_gates / N
-            dparams["db_i"] += np.sum(dx_gates, axis=0, keepdims=True) / N
-            dparams["db_h"] += np.sum(dh_gates, axis=0, keepdims=True) / N
-            dinputs[:, t] = dx_gates @ self.params["W_i"].T
-            dh_next = dh_prev_z + dh_gates @ self.params["W_h"].T
+            dz = dh * (n - self.h[:, t]) * z * (1 - z)
+            dn = dh * z * (1 - n ** 2)
+            xrh[:, :D] = self.inputs[:, t]
+            xrh[:, D:] = r * self.h[:, t]
+            dWn += xrh.T @ dn / N
+            dbn += np.sum(dn, axis=0, keepdims=True) / N
+            dxrh = dn @ Wn.T
+            dr = dxrh[:, D:] * self.h[:, t] * r * (1 - r)
+            dzr = np.concatenate([dz, dr], axis=1)
+            xh[:, :D] = self.inputs[:, t]
+            xh[:, D:] = self.h[:, t]
+            dWz += xh.T @ dzr / N
+            dbz += np.sum(dzr, axis=0, keepdims=True) / N
+            dxh_zr = dzr @ Wz.T
+            dinputs[:, t] = dxh_zr[:, :D] + dxrh[:, :D]
+            dh_next = dh * (1 - z) + dxh_zr[:, D:] + dxrh[:, D:] * r
         if self.trainable:
-            self.optimizer.update(self, dparams, learning_rate)
+            self.optimizer.update(self, {"dWz": dWz, "dWn": dWn, "dbz": dbz, "dbn": dbn}, learning_rate)
         return dinputs
 
     def get_num_parameters(self):

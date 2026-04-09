@@ -196,9 +196,9 @@ class Model:
             'Activation': ('activation', 'alpha'),
             'MultiHeadAttention': ('d_model', 'num_heads'),
             'PositionalEncoding': ('max_len',),
-            'RNN': ('units', 'return_sequences', 'initializer'),
-            'LSTM': ('units', 'return_sequences', 'initializer'),
-            'GRU': ('units', 'return_sequences', 'initializer'),
+            'RNN': ('units', 'return_sequences'),
+            'LSTM': ('units', 'return_sequences'),
+            'GRU': ('units', 'return_sequences'),
         }
         keys = arg_map.get(layer_type, ())
         return {k: getattr(layer, k) for k in keys}

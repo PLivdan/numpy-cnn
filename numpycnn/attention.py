@@ -117,7 +117,8 @@ class MultiHeadAttention(BaseLayer):
         dparams["dbv"] = np.sum(dV, axis=(0, 1), keepdims=True)
 
         dinputs = dQ @ self.params["Wq"].T + dK @ self.params["Wk"].T + dV @ self.params["Wv"].T
-        self.optimizer.update(self, dparams, learning_rate)
+        if self.trainable:
+            self.optimizer.update(self, dparams, learning_rate)
         return dinputs
 
     def get_num_parameters(self):

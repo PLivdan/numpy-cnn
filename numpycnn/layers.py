@@ -9,6 +9,7 @@ class BaseLayer:
         self.params = {}
         self.optimizer = None
         self.initializer = 'xavier'
+        self.trainable = True
 
     def set_initializer(self, initializer):
         self.initializer = initializer
@@ -148,7 +149,8 @@ class Conv2D(BaseLayer):
         W_col = self.params["W"].reshape((self.filters, -1)).T
         dinputs_col = W_col @ grads_col
         dinputs = col2im(dinputs_col, self.inputs.shape, self.kernel_size, self.stride, 0)
-        self.optimizer.update(self, dparams, learning_rate)
+        if self.trainable:
+            self.optimizer.update(self, dparams, learning_rate)
         if self.padding > 0:
             dinputs = dinputs[:, self.padding:-self.padding, self.padding:-self.padding, :]
         return dinputs
@@ -340,7 +342,8 @@ class Dense(BaseLayer):
         dparams["dW"] = np.dot(flat_inputs.T, dZ) / batch_size
         dparams["db"] = np.sum(dZ, axis=0, keepdims=True) / batch_size
         dA_prev = np.dot(dZ, self.params["W"].T).reshape(self.inputs.shape)
-        self.optimizer.update(self, dparams, learning_rate)
+        if self.trainable:
+            self.optimizer.update(self, dparams, learning_rate)
         return dA_prev
 
     def get_num_parameters(self):
@@ -398,7 +401,8 @@ class BatchNorm(BaseLayer):
         dvariance = np.sum(dnormalized * (self.inputs - rm) * -0.5 * np.power(rv + self.epsilon, -1.5), axis=axis)
         dmean = np.sum(dnormalized * -1 / np.sqrt(rv + self.epsilon), axis=axis) + dvariance * np.sum(-2 * (self.inputs - rm), axis=axis) / N
         dA_prev = dnormalized / np.sqrt(rv + self.epsilon) + dvariance * 2 * (self.inputs - rm) / N + dmean / N
-        self.optimizer.update(self, dparams, learning_rate)
+        if self.trainable:
+            self.optimizer.update(self, dparams, learning_rate)
         return dA_prev
 
     def get_num_parameters(self):
@@ -441,7 +445,8 @@ class LayerNorm(BaseLayer):
         dvariance = np.sum(dnormalized * (self.inputs - mean) * -0.5 * np.power(variance + self.epsilon, -1.5), axis=-1, keepdims=True)
         dmean = np.sum(dnormalized * -1 / np.sqrt(variance + self.epsilon), axis=-1, keepdims=True) + dvariance * np.sum(-2 * (self.inputs - mean), axis=-1, keepdims=True) / N
         dA_prev = dnormalized / np.sqrt(variance + self.epsilon) + dvariance * 2 * (self.inputs - mean) / N + dmean / N
-        self.optimizer.update(self, dparams, learning_rate)
+        if self.trainable:
+            self.optimizer.update(self, dparams, learning_rate)
         return dA_prev
 
     def get_num_parameters(self):
@@ -707,7 +712,8 @@ class ConvTranspose2D(BaseLayer):
         s = self.stride
         dinputs = dinputs_dilated[:, ::s, ::s, :]
 
-        self.optimizer.update(self, dparams, learning_rate)
+        if self.trainable:
+            self.optimizer.update(self, dparams, learning_rate)
         return dinputs
 
     def get_num_parameters(self):
@@ -781,7 +787,8 @@ class DepthwiseConv2D(BaseLayer):
             for j in range(KW):
                 dinputs[:, i:i + oH * self.stride:self.stride,
                         j:j + oW * self.stride:self.stride, :] += np.einsum('nohcd,cd->nohc', grads_reshaped, W[i, j, :, :])
-        self.optimizer.update(self, dparams, learning_rate)
+        if self.trainable:
+            self.optimizer.update(self, dparams, learning_rate)
         if self.padding > 0:
             dinputs = dinputs[:, self.padding:-self.padding, self.padding:-self.padding, :]
         return dinputs
@@ -926,7 +933,8 @@ class Conv1D(BaseLayer):
         W_col = self.params["W"].reshape(K * C, self.filters)
         dinputs_col = W_col @ grads_col
         dinputs = col2im_1d(dinputs_col, self.inputs.shape, K, self.stride, self.padding)
-        self.optimizer.update(self, dparams, learning_rate)
+        if self.trainable:
+            self.optimizer.update(self, dparams, learning_rate)
         return dinputs
 
     def get_num_parameters(self):
@@ -1032,7 +1040,8 @@ class Embedding(BaseLayer):
     def backward(self, grads, learning_rate):
         dparams = {"dW": np.zeros_like(self.params["W"])}
         np.add.at(dparams["dW"], self.inputs, grads)
-        self.optimizer.update(self, dparams, learning_rate)
+        if self.trainable:
+            self.optimizer.update(self, dparams, learning_rate)
         return None
 
     def get_num_parameters(self):

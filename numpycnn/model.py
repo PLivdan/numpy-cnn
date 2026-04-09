@@ -75,6 +75,21 @@ class Model:
     def predict(self, inputs):
         return self.forward(inputs, training=False)
 
+    def freeze(self, layer_indices=None):
+        layers = self.layers if layer_indices is None else [self.layers[i] for i in layer_indices]
+        for layer in layers:
+            layer.trainable = False
+
+    def unfreeze(self, layer_indices=None):
+        layers = self.layers if layer_indices is None else [self.layers[i] for i in layer_indices]
+        for layer in layers:
+            layer.trainable = True
+
+    def get_total_parameters(self):
+        total = sum(l.get_num_parameters() for l in self.layers)
+        trainable = sum(l.get_num_parameters() for l in self.layers if l.trainable)
+        return total, trainable
+
     def fit(self, X_train, y_train, X_val, y_val, batch_size, epochs, loss_fn,
             l2_lambda=0.01, lr_scheduler=None, checkpoint_path=None, callbacks=[], augmentor=None):
         if not self.compiled:
@@ -178,6 +193,9 @@ class Model:
             'Activation': ('activation', 'alpha'),
             'MultiHeadAttention': ('d_model', 'num_heads'),
             'PositionalEncoding': ('max_len',),
+            'RNN': ('units', 'return_sequences', 'initializer'),
+            'LSTM': ('units', 'return_sequences', 'initializer'),
+            'GRU': ('units', 'return_sequences', 'initializer'),
         }
         keys = arg_map.get(layer_type, ())
         return {k: getattr(layer, k) for k in keys}
@@ -202,13 +220,15 @@ class Model:
         from . import layers as layer_module
         from . import activations as act_module
         from . import attention as attn_module
+        from . import recurrent as rnn_module
         new_model = cls()
         new_model.compiled = model_state.get('compiled', False)
         for layer_state in model_state['layers']:
             layer_name = layer_state['type']
             layer_class = (getattr(layer_module, layer_name, None)
                            or getattr(act_module, layer_name, None)
-                           or getattr(attn_module, layer_name, None))
+                           or getattr(attn_module, layer_name, None)
+                           or getattr(rnn_module, layer_name, None))
             layer_instance = layer_class(**layer_state['init_args'])
             layer_instance.__dict__.update(layer_state['state'])
             new_model.layers.append(layer_instance)

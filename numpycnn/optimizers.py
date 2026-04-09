@@ -2,9 +2,11 @@ import numpy as np
 
 
 class Optimizer:
-    def __init__(self, use_agc=False, clip_factor=0.1):
+    def __init__(self, use_agc=False, clip_factor=0.1, clip_norm=None, clip_value=None):
         self.use_agc = use_agc
         self.clip_factor = clip_factor
+        self.clip_norm = clip_norm
+        self.clip_value = clip_value
 
     def adaptive_gradient_clipping(self, layer, grads):
         for key in layer.params.keys():
@@ -14,12 +16,25 @@ class Optimizer:
             clipping_factor = min(1, max_norm / (grad_norm + 1e-8))
             grads["d" + key] = clipping_factor * grads["d" + key]
 
+    def gradient_clipping(self, grads):
+        if self.clip_value is not None:
+            for key in grads:
+                grads[key] = np.clip(grads[key], -self.clip_value, self.clip_value)
+        if self.clip_norm is not None:
+            total_norm = np.sqrt(sum(np.sum(grads[k] ** 2) for k in grads))
+            if total_norm > self.clip_norm:
+                scale = self.clip_norm / (total_norm + 1e-8)
+                for key in grads:
+                    grads[key] = grads[key] * scale
+
     def init_params(self, layer):
         pass
 
     def update(self, layer, grads, lr):
         if self.use_agc:
             self.adaptive_gradient_clipping(layer, grads)
+        if self.clip_norm is not None or self.clip_value is not None:
+            self.gradient_clipping(grads)
 
 
 class SGD(Optimizer):

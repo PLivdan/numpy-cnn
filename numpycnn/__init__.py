@@ -7,6 +7,7 @@ from .layers import (
 )
 from .activations import Activation
 from .attention import MultiHeadAttention, PositionalEncoding
+from .recurrent import RNN, LSTM, GRU, Bidirectional
 from .optimizers import (
     Optimizer, SGD, SGDmom, RMSprop, AdaGrad, AdaDelta,
     Adam, AdamW, NAG, AMSGrad, Yogi, AdaFactor,
@@ -21,3 +22,8 @@ from .schedulers import LRScheduler, CosineAnnealingLR, WarmupScheduler, Exponen
 from .callbacks import EarlyStopping, ModelCheckpoint
 from .augmentation import ImageDataAugmentor
 from .datasets import load_fashion_mnist, load_cifar10
+from .dataloader import DataLoader, train_test_split, one_hot
+from .metrics import (
+    accuracy, confusion_matrix, precision, recall, f1_score,
+    top_k_accuracy, classification_report,
+)

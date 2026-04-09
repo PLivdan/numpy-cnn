@@ -41,3 +41,44 @@ class LRScheduler:
         if val_loss is not None:
             self.on_epoch_end(epoch, val_loss)
         return self.lr
+
+
+class CosineAnnealingLR:
+    def __init__(self, initial_lr, T_max, min_lr=0.0):
+        self.initial_lr = initial_lr
+        self.lr = initial_lr
+        self.T_max = T_max
+        self.min_lr = min_lr
+
+    def __call__(self, epoch, val_loss=None):
+        import math
+        self.lr = self.min_lr + 0.5 * (self.initial_lr - self.min_lr) * (1 + math.cos(math.pi * epoch / self.T_max))
+        return self.lr
+
+
+class WarmupScheduler:
+    def __init__(self, scheduler, warmup_epochs, warmup_start_lr=1e-7):
+        self.scheduler = scheduler
+        self.warmup_epochs = warmup_epochs
+        self.warmup_start_lr = warmup_start_lr
+        self.initial_lr = scheduler.initial_lr
+        self.lr = warmup_start_lr
+
+    def __call__(self, epoch, val_loss=None):
+        if epoch < self.warmup_epochs:
+            self.lr = self.warmup_start_lr + (self.initial_lr - self.warmup_start_lr) * epoch / self.warmup_epochs
+        else:
+            self.lr = self.scheduler(epoch - self.warmup_epochs, val_loss)
+        return self.lr
+
+
+class ExponentialLR:
+    def __init__(self, initial_lr, decay_rate=0.95, min_lr=1e-7):
+        self.initial_lr = initial_lr
+        self.lr = initial_lr
+        self.decay_rate = decay_rate
+        self.min_lr = min_lr
+
+    def __call__(self, epoch, val_loss=None):
+        self.lr = max(self.initial_lr * (self.decay_rate ** epoch), self.min_lr)
+        return self.lr

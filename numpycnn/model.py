@@ -84,6 +84,10 @@ class Model:
         n_batches = int(np.ceil(X_train.shape[0] / batch_size))
         best_val_loss = float('inf')
 
+        for cb in callbacks:
+            if hasattr(cb, '_model'):
+                cb._model = self
+
         for epoch in range(epochs):
             for callback in callbacks:
                 callback.on_epoch_begin(epoch)
@@ -132,16 +136,20 @@ class Model:
             if lr_scheduler:
                 learning_rate = lr_scheduler(epoch, val_loss)
 
+            logs = {
+                'train_loss': train_loss, 'train_accuracy': train_accuracy,
+                'val_loss': val_loss, 'val_accuracy': val_accuracy,
+            }
             for callback in callbacks:
-                callback.on_epoch_end(epoch, logs={
-                    'train_loss': train_loss, 'train_accuracy': train_accuracy,
-                    'val_loss': val_loss, 'val_accuracy': val_accuracy,
-                })
+                callback.on_epoch_end(epoch, logs=logs)
 
             history['train_loss'].append(train_loss)
             history['train_accuracy'].append(train_accuracy)
             history['val_loss'].append(val_loss)
             history['val_accuracy'].append(val_accuracy)
+
+            if any(getattr(cb, 'stopped', False) for cb in callbacks):
+                break
         return history
 
     @staticmethod
@@ -149,14 +157,27 @@ class Model:
         layer_type = type(layer).__name__
         arg_map = {
             'Conv2D': ('filters', 'kernel_size', 'stride', 'padding', 'activation', 'initializer'),
+            'Conv1D': ('filters', 'kernel_size', 'stride', 'padding', 'activation', 'initializer'),
+            'ConvTranspose2D': ('filters', 'kernel_size', 'stride', 'padding', 'activation', 'initializer'),
+            'DepthwiseConv2D': ('kernel_size', 'stride', 'padding', 'depth_multiplier', 'initializer'),
+            'SeparableConv2D': ('filters', 'kernel_size', 'stride', 'padding', 'activation', 'depth_multiplier', 'initializer'),
             'Pooling2D': ('pool_size', 'stride', 'mode'),
+            'Pooling1D': ('pool_size', 'stride', 'mode'),
             'GlobalAvgPool2D': (),
+            'GlobalAvgPool1D': (),
             'Flatten': (),
+            'Reshape': ('target_shape',),
             'Dense': ('units', 'activation', 'initializer'),
             'BatchNorm': ('momentum', 'epsilon'),
             'LayerNorm': ('epsilon',),
             'Dropout': ('rate',),
             'SkipConnection': ('skip_from', 'operation'),
+            'ZeroPadding2D': (),
+            'Upsample2D': ('scale_factor', 'mode'),
+            'Embedding': ('vocab_size', 'embed_dim'),
+            'Activation': ('activation', 'alpha'),
+            'MultiHeadAttention': ('d_model', 'num_heads'),
+            'PositionalEncoding': ('max_len',),
         }
         keys = arg_map.get(layer_type, ())
         return {k: getattr(layer, k) for k in keys}
@@ -179,10 +200,15 @@ class Model:
         with open(filename, 'rb') as file:
             model_state = pickle.load(file)
         from . import layers as layer_module
+        from . import activations as act_module
+        from . import attention as attn_module
         new_model = cls()
         new_model.compiled = model_state.get('compiled', False)
         for layer_state in model_state['layers']:
-            layer_class = getattr(layer_module, layer_state['type'])
+            layer_name = layer_state['type']
+            layer_class = (getattr(layer_module, layer_name, None)
+                           or getattr(act_module, layer_name, None)
+                           or getattr(attn_module, layer_name, None))
             layer_instance = layer_class(**layer_state['init_args'])
             layer_instance.__dict__.update(layer_state['state'])
             new_model.layers.append(layer_instance)

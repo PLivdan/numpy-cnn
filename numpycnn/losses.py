@@ -39,3 +39,26 @@ def focal_loss(predictions, targets, gamma=2):
     loss = -np.sum(targets * np.power(1 - clipped, gamma) * np.log(clipped)) / m
     grads = -(targets - clipped) * np.power(1 - clipped, gamma - 1)
     return loss, grads
+
+
+def label_smoothing_crossentropy(predictions, targets, smoothing=0.1):
+    n_classes = targets.shape[-1]
+    smooth_targets = targets * (1 - smoothing) + smoothing / n_classes
+    return categorical_crossentropy(predictions, smooth_targets)
+
+
+def kl_divergence(predictions, targets):
+    m = targets.shape[0]
+    clipped_pred = np.clip(predictions, 1e-7, 1 - 1e-7)
+    clipped_targ = np.clip(targets, 1e-7, 1 - 1e-7)
+    loss = np.sum(clipped_targ * np.log(clipped_targ / clipped_pred)) / m
+    grads = -clipped_targ / clipped_pred / m
+    return loss, grads
+
+
+def hinge_loss(predictions, targets):
+    targets_signed = 2 * targets - 1
+    margins = 1 - targets_signed * predictions
+    loss = np.mean(np.maximum(0, margins))
+    grads = np.where(margins > 0, -targets_signed, 0) / targets.shape[0]
+    return loss, grads

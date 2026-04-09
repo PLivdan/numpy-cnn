@@ -4,7 +4,7 @@ import os
 import pickle
 import urllib.request
 
-CACHE_DIR = os.path.join(os.path.expanduser("~"), ".numpycnn_data")
+CACHE_DIR = os.path.join(os.path.expanduser("~"), ".numpyml_data")
 
 
 def _ensure_dir():

@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import tempfile
 import os
-from numpycnn import *
+from numpyml import *
 
 
 @pytest.fixture(autouse=True)

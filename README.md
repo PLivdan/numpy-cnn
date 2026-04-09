@@ -1,21 +1,34 @@
-# numpy-cnn
+# numpy-ml
 
-A deep learning framework built entirely with NumPy. No PyTorch, no TensorFlow, no JAX — just NumPy.
+A machine learning framework built entirely with NumPy. No PyTorch, no TensorFlow, no scikit-learn — just NumPy.
 
-Supports CNNs, RNNs, Transformers, and everything needed to train them.
+Deep learning (CNNs, RNNs, Transformers) + classical ML (Random Forests, Gradient Boosting, KNN, PCA) in one package.
 
 ## Install
 
 ```bash
-git clone https://github.com/PLivdan/numpy-cnn.git
-cd numpy-cnn
+git clone https://github.com/PLivdan/numpy-ml.git
+cd numpy-ml
 pip install numpy matplotlib
+```
+
+## Project Structure
+
+```
+numpyml/
+├── nn/              Neural network layers, model, optimizers, losses
+├── ml/              Classical ML (trees, KNN, linear models, PCA)
+├── data/            Datasets, data loading, augmentation
+├── metrics.py       Accuracy, precision, recall, F1, confusion matrix
+├── utils.py         Parameter counting, weight stats, model comparison
+├── visualize.py     Plotting helpers
+└── zoo.py           Pre-built architectures (LeNet, ResNet, LSTM, Transformer)
 ```
 
 ## Quick Start
 
 ```python
-from numpycnn import *
+from numpyml import *
 
 # Load data
 (X_train, y_train), (X_test, y_test) = load_fashion_mnist()

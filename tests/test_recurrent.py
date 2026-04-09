@@ -1,6 +1,6 @@
 import numpy as np
 import pytest
-from numpycnn import *
+from numpyml import *
 
 
 @pytest.fixture(autouse=True)

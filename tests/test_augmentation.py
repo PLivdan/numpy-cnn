@@ -1,6 +1,6 @@
 import numpy as np
 import pytest
-from numpycnn import ImageDataAugmentor
+from numpyml import ImageDataAugmentor
 
 
 @pytest.fixture(autouse=True)

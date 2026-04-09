@@ -1,6 +1,6 @@
 import numpy as np
 import pytest
-from numpycnn import accuracy, precision, recall, f1_score, confusion_matrix, top_k_accuracy
+from numpyml import accuracy, precision, recall, f1_score, confusion_matrix, top_k_accuracy
 
 
 @pytest.fixture(autouse=True)

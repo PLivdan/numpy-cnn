@@ -1,6 +1,6 @@
 import numpy as np
 import pytest
-from numpycnn import DataLoader, train_test_split, one_hot
+from numpyml import DataLoader, train_test_split, one_hot
 
 
 class TestDataLoader:

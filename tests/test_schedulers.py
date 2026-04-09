@@ -1,6 +1,6 @@
 import numpy as np
 import pytest
-from numpycnn import LRScheduler, CosineAnnealingLR, WarmupScheduler, ExponentialLR
+from numpyml import LRScheduler, CosineAnnealingLR, WarmupScheduler, ExponentialLR
 
 
 class TestLRScheduler:

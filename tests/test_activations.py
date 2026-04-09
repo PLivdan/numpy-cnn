@@ -1,6 +1,6 @@
 import numpy as np
 import pytest
-from numpycnn import Activation
+from numpyml import Activation
 
 
 ACTIVATIONS = ["relu", "leaky_relu", "elu", "selu", "gelu", "silu", "mish", "sigmoid", "tanh", "softmax"]

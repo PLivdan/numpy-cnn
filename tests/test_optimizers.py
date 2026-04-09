@@ -1,6 +1,6 @@
 import numpy as np
 import pytest
-from numpycnn import *
+from numpyml import *
 
 OPTIMIZERS = [SGD, SGDmom, RMSprop, AdaGrad, AdaDelta, Adam, AdamW, NAG, AMSGrad, Yogi, AdaFactor]
 

@@ -1,14 +1,11 @@
-from .model import Model
-from .layers import (
-    Conv2D, Pooling2D, GlobalAvgPool2D, Flatten, Dense,
-    BatchNorm, LayerNorm, Dropout, SkipConnection, Embedding,
+from .nn import (
+    Model, Conv2D, Pooling2D, GlobalAvgPool2D, GlobalAvgPool1D,
+    Flatten, Dense, BatchNorm, LayerNorm, Dropout, SkipConnection, Embedding,
+    Activation, LSTM, GRU, Bidirectional, SeparableConv2D,
+    MultiHeadAttention, PositionalEncoding, CausalMultiHeadAttention,
+    DilatedConv2D, AdaptiveAvgPool2D, SEBlock, FeedForward,
+    TransformerEncoderBlock, SpatialDropout, DropPath,
 )
-from .activations import Activation
-from .recurrent import LSTM, GRU, Bidirectional
-from .attention import MultiHeadAttention, PositionalEncoding, CausalMultiHeadAttention
-from .conv_extra import DilatedConv2D, AdaptiveAvgPool2D
-from .blocks import SEBlock, FeedForward, TransformerEncoderBlock
-from .regularization import SpatialDropout, DropPath
 
 
 def LeNet5(num_classes=10, input_shape=(None, 28, 28, 1)):
@@ -67,7 +64,7 @@ def ResNet(num_classes=10, input_shape=(None, 28, 28, 1)):
 
 
 def MobileNet(num_classes=10, input_shape=(None, 28, 28, 1)):
-    from .layers import SeparableConv2D
+    pass  # SeparableConv2D already imported at top
     m = Model()
     m.add(Conv2D(32, (3, 3), activation='relu', padding='same'))
     m.add(BatchNorm())
@@ -134,16 +131,14 @@ def TransformerClassifier(d_model, num_heads, num_layers, num_classes,
     m.add(PositionalEncoding(max_len=max_len))
     for _ in range(num_layers):
         m.add(TransformerEncoderBlock(d_model, num_heads, d_ff=d_ff, dropout_rate=dropout))
-    m.add(GlobalAvgPool2D() if False else Flatten())
-    from .layers import GlobalAvgPool1D
-    m.layers[-1] = GlobalAvgPool1D()
+    m.add(GlobalAvgPool1D())
     m.add(Dropout(dropout))
     m.add(Dense(num_classes, activation='softmax'))
     return m
 
 
 def Autoencoder(latent_dim=32, input_shape=(None, 28, 28, 1)):
-    from .layers import ConvTranspose2D, Reshape
+    from .nn.layers import ConvTranspose2D, Reshape
     m = Model()
     m.add(Conv2D(32, (3, 3), activation='relu', padding='same'))
     m.add(Pooling2D((2, 2), stride=2))

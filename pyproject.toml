@@ -3,9 +3,9 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
-name = "numpycnn"
+name = "numpyml"
 version = "0.1.0"
-description = "Deep learning framework built entirely with NumPy"
+description = "Machine learning framework built entirely with NumPy"
 requires-python = ">=3.9"
 dependencies = ["numpy"]
 

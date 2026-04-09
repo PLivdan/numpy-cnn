@@ -188,6 +188,9 @@ class Model:
             'Dense': ('units', 'activation', 'initializer'),
             'BatchNorm': ('momentum', 'epsilon'),
             'LayerNorm': ('epsilon',),
+            'GroupNorm': ('num_groups', 'epsilon'),
+            'InstanceNorm': ('epsilon',),
+            'RMSNorm': ('epsilon',),
             'Dropout': ('rate',),
             'SkipConnection': ('skip_from', 'operation'),
             'ZeroPadding2D': (),
@@ -199,6 +202,17 @@ class Model:
             'RNN': ('units', 'return_sequences'),
             'LSTM': ('units', 'return_sequences'),
             'GRU': ('units', 'return_sequences'),
+            'CausalMultiHeadAttention': ('d_model', 'num_heads'),
+            'CrossAttention': ('d_model', 'num_heads'),
+            'RotaryPositionalEncoding': ('d_model', 'max_len'),
+            'SpatialDropout': ('rate',),
+            'DropPath': ('rate',),
+            'DilatedConv2D': ('filters', 'kernel_size', 'dilation', 'padding', 'activation', 'initializer'),
+            'AdaptiveAvgPool2D': ('output_size',),
+            'SEBlock': ('reduction',),
+            'FeedForward': ('d_model', 'd_ff', 'activation', 'dropout_rate'),
+            'TransformerEncoderBlock': ('d_model', 'num_heads', 'd_ff', 'dropout_rate'),
+            'TransformerDecoderBlock': ('d_model', 'num_heads', 'd_ff', 'dropout_rate'),
         }
         keys = arg_map.get(layer_type, ())
         return {k: getattr(layer, k) for k in keys}
@@ -224,6 +238,9 @@ class Model:
         from . import activations as act_module
         from . import attention as attn_module
         from . import recurrent as rnn_module
+        from . import regularization as reg_module
+        from . import conv_extra as conv_module
+        from . import blocks as block_module
         new_model = cls()
         new_model.compiled = model_state.get('compiled', False)
         for layer_state in model_state['layers']:
@@ -231,7 +248,10 @@ class Model:
             layer_class = (getattr(layer_module, layer_name, None)
                            or getattr(act_module, layer_name, None)
                            or getattr(attn_module, layer_name, None)
-                           or getattr(rnn_module, layer_name, None))
+                           or getattr(rnn_module, layer_name, None)
+                           or getattr(reg_module, layer_name, None)
+                           or getattr(conv_module, layer_name, None)
+                           or getattr(block_module, layer_name, None))
             layer_instance = layer_class(**layer_state['init_args'])
             layer_instance.__dict__.update(layer_state['state'])
             new_model.layers.append(layer_instance)

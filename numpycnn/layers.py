@@ -1088,3 +1088,161 @@ class Reshape(BaseLayer):
 
     def summary(self):
         return ["Reshape", self.output_shape[1:], 0, ""]
+
+
+class GroupNorm(BaseLayer):
+    def __init__(self, num_groups=32, epsilon=1e-5):
+        super().__init__()
+        self.num_groups = num_groups
+        self.epsilon = epsilon
+        self.params = {"gamma": None, "beta": None}
+        self.layer_type = "GroupNorm"
+
+    def build(self, input_shape):
+        super().build(input_shape)
+        self.output_shape = input_shape
+        C = input_shape[-1]
+        assert C % self.num_groups == 0, f"Channels {C} must be divisible by num_groups {self.num_groups}"
+        self.params["gamma"] = np.ones(C)
+        self.params["beta"] = np.zeros(C)
+
+    def forward(self, inputs, training=True):
+        self._assert_input_shape(inputs.shape)
+        self.inputs = inputs
+        shape = inputs.shape
+        C = shape[-1]
+        G = self.num_groups
+        group_size = C // G
+        if inputs.ndim == 4:
+            N, H, W, _ = shape
+            x = inputs.reshape(N, H, W, G, group_size)
+            axes = (1, 2, 4)
+        else:
+            N, _ = shape
+            x = inputs.reshape(N, G, group_size)
+            axes = (2,)
+        self._mean = np.mean(x, axis=axes, keepdims=True)
+        self._var = np.var(x, axis=axes, keepdims=True)
+        self._std_inv = 1.0 / np.sqrt(self._var + self.epsilon)
+        self._x_centered = x - self._mean
+        self._x_norm = self._x_centered * self._std_inv
+        self.normalized_inputs = self._x_norm.reshape(shape)
+        return self.params["gamma"] * self.normalized_inputs + self.params["beta"]
+
+    def backward(self, grads, learning_rate):
+        dparams = {}
+        axis_to_sum = tuple(range(len(grads.shape) - 1))
+        dparams["dgamma"] = np.sum(grads * self.normalized_inputs, axis=axis_to_sum)
+        dparams["dbeta"] = np.sum(grads, axis=axis_to_sum)
+        shape = self.inputs.shape
+        C = shape[-1]
+        G = self.num_groups
+        group_size = C // G
+        dnorm = (grads * self.params["gamma"]).reshape(self._x_centered.shape)
+        if self.inputs.ndim == 4:
+            N = np.prod([shape[1], shape[2], group_size])
+        else:
+            N = group_size
+        dvariance = np.sum(dnorm * self._x_centered * -0.5 * self._std_inv ** 3, axis=tuple(i for i in range(dnorm.ndim) if self._mean.shape[i] == 1), keepdims=True)
+        dmean = np.sum(dnorm * -self._std_inv, axis=tuple(i for i in range(dnorm.ndim) if self._mean.shape[i] == 1), keepdims=True) + dvariance * np.sum(-2 * self._x_centered, axis=tuple(i for i in range(dnorm.ndim) if self._mean.shape[i] == 1), keepdims=True) / N
+        dA_prev = (dnorm * self._std_inv + dvariance * 2 * self._x_centered / N + dmean / N).reshape(shape)
+        if self.trainable:
+            self.optimizer.update(self, dparams, learning_rate)
+        return dA_prev
+
+    def get_num_parameters(self):
+        return len(self.params["gamma"]) + len(self.params["beta"])
+
+    def summary(self):
+        return ["GroupNorm", self.output_shape[1:], self.get_num_parameters(), ""]
+
+
+class InstanceNorm(BaseLayer):
+    def __init__(self, epsilon=1e-5):
+        super().__init__()
+        self.epsilon = epsilon
+        self.params = {"gamma": None, "beta": None}
+        self.layer_type = "InstanceNorm"
+
+    def build(self, input_shape):
+        super().build(input_shape)
+        self.output_shape = input_shape
+        C = input_shape[-1]
+        self.params["gamma"] = np.ones(C)
+        self.params["beta"] = np.zeros(C)
+
+    def forward(self, inputs, training=True):
+        self._assert_input_shape(inputs.shape)
+        self.inputs = inputs
+        if inputs.ndim == 4:
+            axes = (1, 2)
+        else:
+            axes = (-1,)
+        self._mean = np.mean(inputs, axis=axes, keepdims=True)
+        self._var = np.var(inputs, axis=axes, keepdims=True)
+        self._std_inv = 1.0 / np.sqrt(self._var + self.epsilon)
+        self._x_centered = inputs - self._mean
+        self.normalized_inputs = self._x_centered * self._std_inv
+        return self.params["gamma"] * self.normalized_inputs + self.params["beta"]
+
+    def backward(self, grads, learning_rate):
+        dparams = {}
+        axis_to_sum = tuple(range(len(grads.shape) - 1))
+        dparams["dgamma"] = np.sum(grads * self.normalized_inputs, axis=axis_to_sum)
+        dparams["dbeta"] = np.sum(grads, axis=axis_to_sum)
+        dnormalized = grads * self.params["gamma"]
+        if self.inputs.ndim == 4:
+            axes = (1, 2)
+            N = self.inputs.shape[1] * self.inputs.shape[2]
+        else:
+            axes = (-1,)
+            N = self.inputs.shape[-1]
+        dvariance = np.sum(dnormalized * self._x_centered * -0.5 * self._std_inv ** 3, axis=axes, keepdims=True)
+        dmean = np.sum(dnormalized * -self._std_inv, axis=axes, keepdims=True) + dvariance * np.sum(-2 * self._x_centered, axis=axes, keepdims=True) / N
+        dA_prev = dnormalized * self._std_inv + dvariance * 2 * self._x_centered / N + dmean / N
+        if self.trainable:
+            self.optimizer.update(self, dparams, learning_rate)
+        return dA_prev
+
+    def get_num_parameters(self):
+        return len(self.params["gamma"]) + len(self.params["beta"])
+
+    def summary(self):
+        return ["InstanceNorm", self.output_shape[1:], self.get_num_parameters(), ""]
+
+
+class RMSNorm(BaseLayer):
+    def __init__(self, epsilon=1e-5):
+        super().__init__()
+        self.epsilon = epsilon
+        self.params = {"gamma": None}
+        self.layer_type = "RMSNorm"
+
+    def build(self, input_shape):
+        super().build(input_shape)
+        self.output_shape = input_shape
+        self.params["gamma"] = np.ones(input_shape[-1])
+
+    def forward(self, inputs, training=True):
+        self._assert_input_shape(inputs.shape)
+        self.inputs = inputs
+        self._rms = np.sqrt(np.mean(inputs ** 2, axis=-1, keepdims=True) + self.epsilon)
+        self.normalized_inputs = inputs / self._rms
+        return self.params["gamma"] * self.normalized_inputs
+
+    def backward(self, grads, learning_rate):
+        dparams = {}
+        axis_to_sum = tuple(range(len(grads.shape) - 1))
+        dparams["dgamma"] = np.sum(grads * self.normalized_inputs, axis=axis_to_sum)
+        dnormalized = grads * self.params["gamma"]
+        N = self.inputs.shape[-1]
+        dA_prev = dnormalized / self._rms - self.inputs * np.sum(dnormalized * self.inputs, axis=-1, keepdims=True) / (N * self._rms ** 3)
+        if self.trainable:
+            self.optimizer.update(self, dparams, learning_rate)
+        return dA_prev
+
+    def get_num_parameters(self):
+        return len(self.params["gamma"])
+
+    def summary(self):
+        return ["RMSNorm", self.output_shape[1:], self.get_num_parameters(), ""]

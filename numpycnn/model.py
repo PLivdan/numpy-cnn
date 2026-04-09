@@ -111,6 +111,8 @@ class Model:
             X_train_shuffled = X_train[indices]
             y_train_shuffled = y_train[indices]
             epoch_train_losses = []
+            train_correct = 0
+            train_total = 0
 
             print(f"\n Epoch {epoch+1}/{epochs}")
             for i in range(n_batches):
@@ -118,19 +120,20 @@ class Model:
                 y_batch = y_train_shuffled[i*batch_size:(i+1)*batch_size]
                 if augmentor:
                     X_batch = augmentor.augment(X_batch)
-                batch_train_loss = self.train_on_batch(X_batch, y_batch, loss_fn, learning_rate, l2_lambda)
-                epoch_train_losses.append(batch_train_loss)
+                preds = self.forward(X_batch, training=True)
+                loss, grads = loss_fn(preds, y_batch)
+                l2_loss = sum(layer.l2_regularization(l2_lambda) for layer in self.layers)
+                loss += l2_loss / y_batch.shape[0]
+                self.backward(grads, learning_rate)
+                epoch_train_losses.append(loss)
+                train_correct += np.sum(np.argmax(preds, axis=1) == np.argmax(y_batch, axis=1))
+                train_total += y_batch.shape[0]
                 progress = (i+1) / n_batches
                 filled_elements = int(progress * 40)
                 bar = '=' * filled_elements + '>' + '.' * (39 - filled_elements)
-                print(f"\r[{bar}] Batch {i+1}/{n_batches} - Loss: {batch_train_loss:.4f}", end="")
+                print(f"\r[{bar}] Batch {i+1}/{n_batches} - Loss: {loss:.4f}", end="")
 
-            train_predictions = np.concatenate(
-                [self.predict(X_train[i*batch_size:(i+1)*batch_size])
-                 for i in range(int(np.ceil(X_train.shape[0] / batch_size)))], axis=0)
-            train_predicted_labels = np.argmax(train_predictions, axis=1)
-            train_true_labels = np.argmax(y_train, axis=1)
-            train_accuracy = np.mean(train_predicted_labels == train_true_labels)
+            train_accuracy = train_correct / train_total
             train_loss = np.mean(epoch_train_losses)
 
             val_predictions = np.concatenate(

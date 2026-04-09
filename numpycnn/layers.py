@@ -124,9 +124,9 @@ class Conv2D(BaseLayer):
         N, H, W, C = self.inputs.shape
         KH, KW = self.kernel_size
         _, OH, OW, _ = self.output_shape
-        col_matrix = im2col(self.inputs, self.kernel_size, self.stride, 0)
+        self._col = im2col(self.inputs, self.kernel_size, self.stride, 0)
         W_col = self.params["W"].reshape((KH * KW * C, self.filters))
-        outputs = W_col.T @ col_matrix
+        outputs = W_col.T @ self._col
         outputs = outputs + self.params["b"][0, 0, 0, :][:, np.newaxis]
         outputs = outputs.reshape((self.filters, OH, OW, N)).transpose(3, 1, 2, 0)
         if self.activation == 'relu':
@@ -142,8 +142,7 @@ class Conv2D(BaseLayer):
         KH, KW = self.kernel_size
         _, OH, OW, _ = self.output_shape
         grads_col = grads.transpose(3, 1, 2, 0).reshape((self.filters, -1))
-        col_matrix = im2col(self.inputs, self.kernel_size, self.stride, 0)
-        dparams["dW"] = grads_col @ col_matrix.T
+        dparams["dW"] = grads_col @ self._col.T
         dparams["dW"] = dparams["dW"].reshape((self.filters, KH, KW, C)).transpose(1, 2, 3, 0)
         dparams["db"] = np.sum(grads, axis=(0, 1, 2)).reshape((1, 1, 1, self.filters))
         W_col = self.params["W"].reshape((self.filters, -1)).T
@@ -209,22 +208,36 @@ class Pooling2D(BaseLayer):
     def _pool_backward(self, grads):
         N, H, W, C = self.inputs.shape
         pH, pW = self.pool_size
+        s = self.stride
         _, oH, oW, _ = self.output_shape
+        if self.mode == 'max' and s == pH and s == pW:
+            truncH, truncW = oH * s, oW * s
+            inp_trunc = self.inputs[:, :truncH, :truncW, :]
+            reshaped = inp_trunc.reshape(N, oH, pH, oW, pW, C)
+            max_vals = reshaped.max(axis=(2, 4), keepdims=True)
+            mask = (reshaped == max_vals)
+            dinputs = np.zeros_like(self.inputs)
+            dinputs[:, :truncH, :truncW, :] = (mask * grads[:, :, None, :, None, :]).reshape(N, truncH, truncW, C)
+            return dinputs
+        elif self.mode == 'average' and s == pH and s == pW:
+            truncH, truncW = oH * s, oW * s
+            dinputs = np.zeros_like(self.inputs)
+            expanded = (grads / (pH * pW))[:, :, None, :, None, :]
+            expanded = np.broadcast_to(expanded, (N, oH, pH, oW, pW, C))
+            dinputs[:, :truncH, :truncW, :] = expanded.reshape(N, truncH, truncW, C)
+            return dinputs
         dinputs = np.zeros_like(self.inputs)
+        windows = self._get_windows(self.inputs)
         if self.mode == 'max':
-            windows = self._get_windows(self.inputs)
             max_vals = np.max(windows, axis=(3, 4), keepdims=True)
             mask = (windows == max_vals)
             grad_windows = mask * grads[:, :, :, None, None, :]
-            for i in range(pH):
-                for j in range(pW):
-                    dinputs[:, i:i + oH * self.stride:self.stride,
-                            j:j + oW * self.stride:self.stride, :] += grad_windows[:, :, :, i, j, :]
-        elif self.mode == 'average':
-            for i in range(pH):
-                for j in range(pW):
-                    dinputs[:, i:i + oH * self.stride:self.stride,
-                            j:j + oW * self.stride:self.stride, :] += grads / (pH * pW)
+        else:
+            grad_windows = np.broadcast_to(grads[:, :, :, None, None, :] / (pH * pW),
+                                           (N, oH, oW, pH, pW, C))
+        for i in range(pH):
+            for j in range(pW):
+                dinputs[:, i:i + oH * s:s, j:j + oW * s:s, :] += grad_windows[:, :, :, i, j, :]
         return dinputs
 
     def get_num_parameters(self):
@@ -375,19 +388,23 @@ class BatchNorm(BaseLayer):
     def forward(self, inputs, training=True):
         self._assert_input_shape(inputs.shape)
         self.inputs = inputs
-        axis = tuple(range(inputs.ndim - 1))
-        mean = np.mean(inputs, axis=axis, keepdims=True)
-        variance = np.var(inputs, axis=axis, keepdims=True)
+        ndim = inputs.ndim
+        axis = tuple(range(ndim - 1))
         if training:
-            self.normalized_inputs = (inputs - mean) / np.sqrt(variance + self.epsilon)
-            self.running_mean = self.momentum * self.running_mean + (1 - self.momentum) * np.squeeze(mean)
-            self.running_variance = self.momentum * self.running_variance + (1 - self.momentum) * np.squeeze(variance)
+            self._mean = np.mean(inputs, axis=axis, keepdims=True)
+            self._var = np.var(inputs, axis=axis, keepdims=True)
+            self._std_inv = 1.0 / np.sqrt(self._var + self.epsilon)
+            self._x_centered = inputs - self._mean
+            self.normalized_inputs = self._x_centered * self._std_inv
+            self.running_mean = self.momentum * self.running_mean + (1 - self.momentum) * np.squeeze(self._mean)
+            self.running_variance = self.momentum * self.running_variance + (1 - self.momentum) * np.squeeze(self._var)
         else:
-            mean = self.running_mean.reshape((1,) * (inputs.ndim - 1) + (-1,))
-            variance = self.running_variance.reshape((1,) * (inputs.ndim - 1) + (-1,))
-            self.normalized_inputs = (inputs - mean) / np.sqrt(variance + self.epsilon)
-        out = self.params["gamma"].reshape((1,) * (inputs.ndim - 1) + (-1,)) * self.normalized_inputs + self.params["beta"].reshape((1,) * (inputs.ndim - 1) + (-1,))
-        return out
+            mean = self.running_mean.reshape((1,) * (ndim - 1) + (-1,))
+            var = self.running_variance.reshape((1,) * (ndim - 1) + (-1,))
+            self.normalized_inputs = (inputs - mean) / np.sqrt(var + self.epsilon)
+        gamma = self.params["gamma"].reshape((1,) * (ndim - 1) + (-1,))
+        beta = self.params["beta"].reshape((1,) * (ndim - 1) + (-1,))
+        return gamma * self.normalized_inputs + beta
 
     def backward(self, grads, learning_rate):
         axis = tuple(range(self.inputs.ndim - 1))
@@ -396,11 +413,9 @@ class BatchNorm(BaseLayer):
         dparams["dgamma"] = np.sum(grads * self.normalized_inputs, axis=axis)
         dparams["dbeta"] = np.sum(grads, axis=axis)
         dnormalized = grads * self.params["gamma"].reshape((1,) * (grads.ndim - 1) + (-1,))
-        rm = self.running_mean.reshape((1,) * (self.inputs.ndim - 1) + (-1,))
-        rv = self.running_variance.reshape((1,) * (self.inputs.ndim - 1) + (-1,))
-        dvariance = np.sum(dnormalized * (self.inputs - rm) * -0.5 * np.power(rv + self.epsilon, -1.5), axis=axis)
-        dmean = np.sum(dnormalized * -1 / np.sqrt(rv + self.epsilon), axis=axis) + dvariance * np.sum(-2 * (self.inputs - rm), axis=axis) / N
-        dA_prev = dnormalized / np.sqrt(rv + self.epsilon) + dvariance * 2 * (self.inputs - rm) / N + dmean / N
+        dvariance = np.sum(dnormalized * self._x_centered * -0.5 * self._std_inv ** 3, axis=axis)
+        dmean = np.sum(dnormalized * -self._std_inv, axis=axis) + dvariance * np.sum(-2 * self._x_centered, axis=axis) / N
+        dA_prev = dnormalized * self._std_inv + dvariance * 2 * self._x_centered / N + dmean / N
         if self.trainable:
             self.optimizer.update(self, dparams, learning_rate)
         return dA_prev
@@ -428,9 +443,11 @@ class LayerNorm(BaseLayer):
     def forward(self, inputs, training=True):
         self._assert_input_shape(inputs.shape)
         self.inputs = inputs
-        mean = np.mean(inputs, axis=-1, keepdims=True)
-        variance = np.var(inputs, axis=-1, keepdims=True)
-        self.normalized_inputs = (inputs - mean) / np.sqrt(variance + self.epsilon)
+        self._mean = np.mean(inputs, axis=-1, keepdims=True)
+        self._var = np.var(inputs, axis=-1, keepdims=True)
+        self._std_inv = 1.0 / np.sqrt(self._var + self.epsilon)
+        self._x_centered = inputs - self._mean
+        self.normalized_inputs = self._x_centered * self._std_inv
         return self.params["gamma"] * self.normalized_inputs + self.params["beta"]
 
     def backward(self, grads, learning_rate):
@@ -440,11 +457,9 @@ class LayerNorm(BaseLayer):
         dparams["dbeta"] = np.sum(grads, axis=axis_to_sum)
         dnormalized = grads * self.params["gamma"]
         N = dnormalized.shape[-1]
-        mean = np.mean(self.inputs, axis=-1, keepdims=True)
-        variance = np.var(self.inputs, axis=-1, keepdims=True)
-        dvariance = np.sum(dnormalized * (self.inputs - mean) * -0.5 * np.power(variance + self.epsilon, -1.5), axis=-1, keepdims=True)
-        dmean = np.sum(dnormalized * -1 / np.sqrt(variance + self.epsilon), axis=-1, keepdims=True) + dvariance * np.sum(-2 * (self.inputs - mean), axis=-1, keepdims=True) / N
-        dA_prev = dnormalized / np.sqrt(variance + self.epsilon) + dvariance * 2 * (self.inputs - mean) / N + dmean / N
+        dvariance = np.sum(dnormalized * self._x_centered * -0.5 * self._std_inv ** 3, axis=-1, keepdims=True)
+        dmean = np.sum(dnormalized * -self._std_inv, axis=-1, keepdims=True) + dvariance * np.sum(-2 * self._x_centered, axis=-1, keepdims=True) / N
+        dA_prev = dnormalized * self._std_inv + dvariance * 2 * self._x_centered / N + dmean / N
         if self.trainable:
             self.optimizer.update(self, dparams, learning_rate)
         return dA_prev

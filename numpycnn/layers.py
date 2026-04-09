@@ -50,41 +50,35 @@ class BaseLayer:
 def im2col(inputs, kernel_size, stride, padding):
     N, H, W, C = inputs.shape
     KH, KW = kernel_size
-    inputs_padded = np.pad(inputs, ((0, 0), (padding, padding), (padding, padding), (0, 0)), 'constant')
-    N, H_padded, W_padded, C = inputs_padded.shape
-    OH = (H_padded - KH) // stride + 1
-    OW = (W_padded - KW) // stride + 1
-    col_matrix = np.zeros((KH * KW * C, N * OH * OW))
-    col_idx = 0
-    for i in range(0, H_padded - KH + 1, stride):
-        for j in range(0, W_padded - KW + 1, stride):
-            if col_idx + N > col_matrix.shape[1]:
-                break
-            patch = inputs_padded[:, i:i+KH, j:j+KW, :]
-            col_matrix[:, col_idx:col_idx + N] = patch.reshape(N, -1).T
-            col_idx += N
-    return col_matrix
+    if padding > 0:
+        inputs = np.pad(inputs, ((0, 0), (padding, padding), (padding, padding), (0, 0)), 'constant')
+    N, H_p, W_p, C = inputs.shape
+    OH = (H_p - KH) // stride + 1
+    OW = (W_p - KW) // stride + 1
+    s_n, s_h, s_w, s_c = inputs.strides
+    shape = (N, OH, OW, KH, KW, C)
+    strides = (s_n, s_h * stride, s_w * stride, s_h, s_w, s_c)
+    patches = np.lib.stride_tricks.as_strided(inputs, shape=shape, strides=strides)
+    col = patches.transpose(3, 4, 5, 0, 1, 2).reshape(KH * KW * C, N * OH * OW)
+    return col
 
 
 def col2im(col_matrix, input_shape, kernel_size, stride, padding):
     N, H, W, C = input_shape
     KH, KW = kernel_size
-    dinputs_padded = np.zeros((N, H + 2 * padding, W + 2 * padding, C))
-    col_idx = 0
-    max_col_idx = col_matrix.shape[1] - N
-    for i in range(0, H + 2 * padding - KH + 1, stride):
-        for j in range(0, W + 2 * padding - KW + 1, stride):
-            if col_idx > max_col_idx:
-                break
-            col_patch = col_matrix[:, col_idx:col_idx + N]
-            col_patch = col_patch.reshape((KH, KW, C, N)).transpose(3, 0, 1, 2)
-            dinputs_padded[:, i:i+KH, j:j+KW, :] += col_patch
-            col_idx += N
+    H_p, W_p = H + 2 * padding, W + 2 * padding
+    OH = (H_p - KH) // stride + 1
+    OW = (W_p - KW) // stride + 1
+    col_reshaped = col_matrix.reshape(KH, KW, C, N, OH, OW).transpose(3, 4, 5, 0, 1, 2)
+    dinputs_padded = np.zeros((N, H_p, W_p, C))
+    for i in range(KH):
+        i_max = i + OH * stride
+        for j in range(KW):
+            j_max = j + OW * stride
+            dinputs_padded[:, i:i_max:stride, j:j_max:stride, :] += col_reshaped[:, :, :, i, j, :]
     if padding > 0:
-        dinputs = dinputs_padded[:, padding:-padding, padding:-padding, :]
-    else:
-        dinputs = dinputs_padded
-    return dinputs
+        return dinputs_padded[:, padding:-padding, padding:-padding, :]
+    return dinputs_padded
 
 
 class Conv2D(BaseLayer):
@@ -153,7 +147,7 @@ class Conv2D(BaseLayer):
         dparams["db"] = np.sum(grads, axis=(0, 1, 2)).reshape((1, 1, 1, self.filters))
         W_col = self.params["W"].reshape((self.filters, -1)).T
         dinputs_col = W_col @ grads_col
-        dinputs = col2im(dinputs_col, self.inputs.shape, self.kernel_size, self.stride, self.padding)
+        dinputs = col2im(dinputs_col, self.inputs.shape, self.kernel_size, self.stride, 0)
         self.optimizer.update(self, dparams, learning_rate)
         if self.padding > 0:
             dinputs = dinputs[:, self.padding:-self.padding, self.padding:-self.padding, :]
@@ -190,44 +184,45 @@ class Pooling2D(BaseLayer):
         self.inputs = inputs
         return self._pool(inputs)
 
+    def _get_windows(self, inputs):
+        N, H, W, C = inputs.shape
+        pH, pW = self.pool_size
+        _, oH, oW, _ = self.output_shape
+        s_n, s_h, s_w, s_c = inputs.strides
+        shape = (N, oH, oW, pH, pW, C)
+        strides = (s_n, s_h * self.stride, s_w * self.stride, s_h, s_w, s_c)
+        return np.lib.stride_tricks.as_strided(inputs, shape=shape, strides=strides)
+
     def _pool(self, inputs):
-        batch_size, height, width, channels = inputs.shape
-        pool_height, pool_width = self.pool_size
-        outputs = np.zeros((batch_size, *self.output_shape[1:]))
-        for h in range(self.output_shape[1]):
-            for w in range(self.output_shape[2]):
-                h_start, h_end = h * self.stride, h * self.stride + pool_height
-                w_start, w_end = w * self.stride, w * self.stride + pool_width
-                region = inputs[:, h_start:h_end, w_start:w_end, :]
-                if self.mode == 'max':
-                    outputs[:, h, w, :] = np.max(region, axis=(1, 2))
-                elif self.mode == 'average':
-                    outputs[:, h, w, :] = np.mean(region, axis=(1, 2))
-                else:
-                    raise ValueError(f"Unsupported pooling mode: {self.mode}")
-        return outputs
+        windows = self._get_windows(inputs)
+        if self.mode == 'max':
+            return np.max(windows, axis=(3, 4))
+        elif self.mode == 'average':
+            return np.mean(windows, axis=(3, 4))
+        raise ValueError(f"Unsupported pooling mode: {self.mode}")
 
     def backward(self, grads, learning_rate):
         return self._pool_backward(grads)
 
     def _pool_backward(self, grads):
-        batch_size, height, width, channels = self.inputs.shape
-        pool_height, pool_width = self.pool_size
+        N, H, W, C = self.inputs.shape
+        pH, pW = self.pool_size
+        _, oH, oW, _ = self.output_shape
         dinputs = np.zeros_like(self.inputs)
-        for h in range(self.output_shape[1]):
-            for w in range(self.output_shape[2]):
-                h_start, h_end = h * self.stride, h * self.stride + pool_height
-                w_start, w_end = w * self.stride, w * self.stride + pool_width
-                if self.mode == 'max':
-                    region = self.inputs[:, h_start:h_end, w_start:w_end, :]
-                    max_values = np.max(region, axis=(1, 2), keepdims=True)
-                    mask = (region == max_values)
-                    dinputs[:, h_start:h_end, w_start:w_end, :] += mask * grads[:, h, w, :][:, None, None, :]
-                elif self.mode == 'average':
-                    dA = grads[:, h, w, :][:, None, None, :] / (pool_height * pool_width)
-                    dinputs[:, h_start:h_end, w_start:w_end, :] += dA
-                else:
-                    raise ValueError(f"Unsupported pooling mode: {self.mode}")
+        if self.mode == 'max':
+            windows = self._get_windows(self.inputs)
+            max_vals = np.max(windows, axis=(3, 4), keepdims=True)
+            mask = (windows == max_vals)
+            grad_windows = mask * grads[:, :, :, None, None, :]
+            for i in range(pH):
+                for j in range(pW):
+                    dinputs[:, i:i + oH * self.stride:self.stride,
+                            j:j + oW * self.stride:self.stride, :] += grad_windows[:, :, :, i, j, :]
+        elif self.mode == 'average':
+            for i in range(pH):
+                for j in range(pW):
+                    dinputs[:, i:i + oH * self.stride:self.stride,
+                            j:j + oW * self.stride:self.stride, :] += grads / (pH * pW)
         return dinputs
 
     def get_num_parameters(self):
@@ -747,22 +742,26 @@ class DepthwiseConv2D(BaseLayer):
         self.params["W"] = np.random.randn(KH, KW, C, self.depth_multiplier) * np.sqrt(2.0 / fan_in)
         self.params["b"] = np.zeros((1, 1, 1, out_c))
 
+    def _get_windows(self, inputs):
+        N, H, W, C = inputs.shape
+        KH, KW = self.kernel_size
+        _, oH, oW, _ = self.output_shape
+        s_n, s_h, s_w, s_c = inputs.strides
+        shape = (N, oH, oW, KH, KW, C)
+        strides = (s_n, s_h * self.stride, s_w * self.stride, s_h, s_w, s_c)
+        return np.lib.stride_tricks.as_strided(inputs, shape=shape, strides=strides)
+
     def forward(self, inputs, training=True):
         self._assert_input_shape(inputs.shape)
         self.inputs = np.pad(inputs, ((0, 0), (self.padding, self.padding), (self.padding, self.padding), (0, 0)), 'constant')
         N, H, W, C = self.inputs.shape
         KH, KW = self.kernel_size
         _, oH, oW, out_c = self.output_shape
-        outputs = np.zeros((N, oH, oW, out_c))
-        for c in range(C):
-            for m in range(self.depth_multiplier):
-                for h in range(oH):
-                    for w in range(oW):
-                        h_s, w_s = h * self.stride, w * self.stride
-                        region = self.inputs[:, h_s:h_s+KH, w_s:w_s+KW, c]
-                        outputs[:, h, w, c * self.depth_multiplier + m] = np.sum(
-                            region * self.params["W"][:, :, c, m], axis=(1, 2)
-                        ) + self.params["b"][0, 0, 0, c * self.depth_multiplier + m]
+        windows = self._get_windows(self.inputs)
+        W = self.params["W"]
+        out = np.einsum('nohwkc,kwcd->nohcd', windows, W)
+        N2, oH2, oW2, C2, dm = out.shape
+        outputs = out.reshape(N2, oH2, oW2, C2 * dm) + self.params["b"][0, 0, 0, :]
         self.outputs = outputs
         return outputs
 
@@ -770,20 +769,18 @@ class DepthwiseConv2D(BaseLayer):
         N, H, W, C = self.inputs.shape
         KH, KW = self.kernel_size
         _, oH, oW, out_c = self.output_shape
-        C_in = C
+        dm = self.depth_multiplier
         dparams = {"dW": np.zeros_like(self.params["W"]), "db": np.zeros_like(self.params["b"])}
-        dinputs = np.zeros_like(self.inputs)
         dparams["db"] = np.sum(grads, axis=(0, 1, 2)).reshape(1, 1, 1, out_c)
-        for c in range(C_in):
-            for m in range(self.depth_multiplier):
-                idx = c * self.depth_multiplier + m
-                for h in range(oH):
-                    for w in range(oW):
-                        h_s, w_s = h * self.stride, w * self.stride
-                        region = self.inputs[:, h_s:h_s+KH, w_s:w_s+KW, c]
-                        g = grads[:, h, w, idx]
-                        dparams["dW"][:, :, c, m] += np.sum(region * g[:, None, None], axis=0)
-                        dinputs[:, h_s:h_s+KH, w_s:w_s+KW, c] += self.params["W"][:, :, c, m] * g[:, None, None]
+        windows = self._get_windows(self.inputs)
+        grads_reshaped = grads.reshape(N, oH, oW, C, dm)
+        dparams["dW"] = np.einsum('nohwkc,nohcd->kwcd', windows, grads_reshaped)
+        dinputs = np.zeros_like(self.inputs)
+        W = self.params["W"]
+        for i in range(KH):
+            for j in range(KW):
+                dinputs[:, i:i + oH * self.stride:self.stride,
+                        j:j + oW * self.stride:self.stride, :] += np.einsum('nohcd,cd->nohc', grads_reshaped, W[i, j, :, :])
         self.optimizer.update(self, dparams, learning_rate)
         if self.padding > 0:
             dinputs = dinputs[:, self.padding:-self.padding, self.padding:-self.padding, :]
@@ -847,29 +844,26 @@ class SeparableConv2D(BaseLayer):
 def im2col_1d(inputs, kernel_size, stride, padding):
     N, L, C = inputs.shape
     K = kernel_size
-    inputs_padded = np.pad(inputs, ((0, 0), (padding, padding), (0, 0)), 'constant')
-    L_padded = inputs_padded.shape[1]
-    oL = (L_padded - K) // stride + 1
-    col = np.zeros((K * C, N * oL))
-    col_idx = 0
-    for i in range(0, L_padded - K + 1, stride):
-        patch = inputs_padded[:, i:i+K, :]
-        col[:, col_idx:col_idx+N] = patch.reshape(N, -1).T
-        col_idx += N
-    return col
+    if padding > 0:
+        inputs = np.pad(inputs, ((0, 0), (padding, padding), (0, 0)), 'constant')
+    L_p = inputs.shape[1]
+    oL = (L_p - K) // stride + 1
+    s_n, s_l, s_c = inputs.strides
+    shape = (N, oL, K, C)
+    strides = (s_n, s_l * stride, s_l, s_c)
+    patches = np.lib.stride_tricks.as_strided(inputs, shape=shape, strides=strides)
+    return patches.transpose(2, 3, 0, 1).reshape(K * C, N * oL)
 
 
 def col2im_1d(col, input_shape, kernel_size, stride, padding):
     N, L, C = input_shape
     K = kernel_size
-    L_padded = L + 2 * padding
-    dinputs_padded = np.zeros((N, L_padded, C))
-    col_idx = 0
-    for i in range(0, L_padded - K + 1, stride):
-        patch = col[:, col_idx:col_idx+N]
-        patch = patch.reshape(K, C, N).transpose(2, 0, 1)
-        dinputs_padded[:, i:i+K, :] += patch
-        col_idx += N
+    L_p = L + 2 * padding
+    oL = (L_p - K) // stride + 1
+    col_reshaped = col.reshape(K, C, N, oL).transpose(2, 3, 0, 1)
+    dinputs_padded = np.zeros((N, L_p, C))
+    for i in range(K):
+        dinputs_padded[:, i:i + oL * stride:stride, :] += col_reshaped[:, :, i, :]
     if padding > 0:
         return dinputs_padded[:, padding:-padding, :]
     return dinputs_padded
